@@ -5,6 +5,7 @@ import {
     ActionPostResponse,
     createPostResponse,
 } from "@solana/actions";
+
 import {
     Connection,
     PublicKey,
@@ -16,19 +17,16 @@ import {
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY!;
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
-
-// Example: Replace with your actual airdrop account keypair
-const yourAirdropAccountKeypair = Keypair.generate(); // Replace with your Keypair loading logic
-
-// Function to check eligibility with Helius
+ 
+const yourAirdropAccountKeypair = Keypair.generate();  
+ 
 async function checkEligibility(userKey: PublicKey): Promise<boolean> {
     console.log("Checking eligibility for user:", userKey.toString());
 
     try {
         const response = await fetch(`https://api.helius.xyz/v0/addresses/${userKey.toBase58()}/balances?api-key=${HELIUS_API_KEY}`);
         const data = await response.json();
-
-        // Example conditions - adjust as needed
+ 
         const solBalance = data.nativeBalance / LAMPORTS_PER_SOL;
         const tokenBalance = data.tokens.find((token: { mint: string, amount: number }) => token.mint === 'your_token_mint_here')?.amount || 0;
 
@@ -42,8 +40,7 @@ async function checkEligibility(userKey: PublicKey): Promise<boolean> {
         return false;
     }
 }
-
-// GET Request - Fetch metadata for the airdrop claim action
+ 
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
@@ -82,8 +79,7 @@ export async function GET(request: Request) {
 }
 
 export const OPTIONS = GET;
-
-// POST Request - Execute the airdrop claim transaction
+ 
 export async function POST(request: Request) {
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
@@ -133,26 +129,26 @@ export async function POST(request: Request) {
 
         // Create airdrop transaction
         console.log("Creating airdrop transaction...");
-        const airdropAmount = 0.1 * LAMPORTS_PER_SOL; // Example: 0.1 SOL airdrop
+        const airdropAmount = 0.1 * LAMPORTS_PER_SOL; 
         const transaction = new Transaction().add(
             SystemProgram.transfer({
-                fromPubkey: yourAirdropAccountKeypair.publicKey, // Use your airdrop account keypair
+                fromPubkey: yourAirdropAccountKeypair.publicKey,
                 toPubkey: account,
                 lamports: airdropAmount,
             })
         );
 
         const blockheight = await connection.getLatestBlockhash();
-        transaction.feePayer = yourAirdropAccountKeypair.publicKey; // Use the public key of the airdrop account
+        transaction.feePayer = yourAirdropAccountKeypair.publicKey;  
         transaction.recentBlockhash = blockheight.blockhash;
         transaction.lastValidBlockHeight = blockheight.lastValidBlockHeight;
 
         // Sign the transaction
-        await transaction.sign(yourAirdropAccountKeypair); // Sign the transaction with your airdrop account keypair
+        await transaction.sign(yourAirdropAccountKeypair);  
 
         const payload: ActionPostResponse = await createPostResponse({
             fields: {
-                transaction: transaction,  // Ensure this is the transaction object
+                transaction: transaction,   
                 message: `Airdrop claim transaction created for ${airdropAmount / LAMPORTS_PER_SOL} SOL.`,
                 type: 'transaction',
             },
