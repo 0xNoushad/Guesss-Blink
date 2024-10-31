@@ -22,8 +22,6 @@ import {
 
 // GET endpoint to retrieve action information and input parameters
 export const GET = async (req: Request) => {
-  const url = new URL(req.url);
-
   const payload: ActionGetResponse = {
     title: "Create Your Meme Coin",
     icon: "https://i.imgur.com/DIb21T3.png",
@@ -76,13 +74,14 @@ export const POST = async (req: Request) => {
     
     const connection = new Connection(clusterApiUrl("devnet"));
 
-
-    // Ensure mint keypair and other required parameters are provided
     const mintKeypair = new PublicKey(params.get("mint") || account.toString());
     const tokenName = params.get("name") || "Custom Token";
     const ticker = params.get("ticker") || "MEME";
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const description = params.get("description") || "Your custom meme coin on Solana.";
-    const image = params.get("image") || ""; // Optional
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const image = params.get("image") || "";  
 
     // Get the minimum balance required for a mint account
     const lamports = await getMinimumBalanceForRentExemptMint(connection);
@@ -99,9 +98,9 @@ export const POST = async (req: Request) => {
       }),
       createInitializeMintInstruction(
         mintKeypair,
-        9, // Token decimals
-        account, // Mint authority
-        account, // Freeze authority
+        9,  // Token decimals
+        account,  // Mint authority
+        account,  // Freeze authority
         TOKEN_PROGRAM_ID
       )
     );
