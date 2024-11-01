@@ -7,25 +7,73 @@ import {
 } from "@solana/actions";
 import {
   clusterApiUrl,
-  ComputeBudgetProgram,
   Connection,
   PublicKey,
   Transaction,
   SystemProgram,
+  Keypair,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createInitializeMintInstruction,
   getMinimumBalanceForRentExemptMint,
   MINT_SIZE,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction,
 } from "@solana/spl-token";
 
-// GET endpoint to retrieve action information and input parameters
+const CONFIG = {
+  MAX_NAME_LENGTH: 32,
+  MAX_TICKER_LENGTH: 5,
+  MIN_NAME_LENGTH: 3,
+  MIN_TICKER_LENGTH: 2,
+  COMPUTE_UNITS: 100000,
+  DECIMALS: 9,
+  INITIAL_SUPPLY: 1000000000000,  
+};
+ 
+const validateInput = (params: URLSearchParams) => {
+  const errors: string[] = [];
+  const name = params.get("name");
+  const ticker = params.get("ticker");
+  const description = params.get("description");
+  const image = params.get("image");
+
+  if (!name || name.length < CONFIG.MIN_NAME_LENGTH || name.length > CONFIG.MAX_NAME_LENGTH) {
+    errors.push(`Token name must be between ${CONFIG.MIN_NAME_LENGTH} and ${CONFIG.MAX_NAME_LENGTH} characters`);
+  }
+
+  if (!ticker || ticker.length < CONFIG.MIN_TICKER_LENGTH || ticker.length > CONFIG.MAX_TICKER_LENGTH) {
+    errors.push(`Ticker must be between ${CONFIG.MIN_TICKER_LENGTH} and ${CONFIG.MAX_TICKER_LENGTH} characters`);
+  }
+
+  if (description && description.length > 200) {
+    errors.push(`Description must not exceed 200 characters`);
+  }
+
+  if (image) {
+    try {
+      new URL(image);
+    } catch {
+      errors.push("Invalid image URL format");
+    }
+  }
+
+  return errors;
+};
+ 
 export const GET = async (req: Request) => {
   const payload: ActionGetResponse = {
     title: "Create Your Meme Coin",
     icon: "https://i.imgur.com/DIb21T3.png",
-    description: "Fill in the details to create your own meme coin on Solana.",
+    description: `Create your own meme coin on Solana. Requirements:
+    - Name: ${CONFIG.MIN_NAME_LENGTH}-${CONFIG.MAX_NAME_LENGTH} characters
+    - Ticker: ${CONFIG.MIN_TICKER_LENGTH}-${CONFIG.MAX_TICKER_LENGTH} characters
+    - Description: Up to 200 characters
+    - Valid image URL (optional)
+    - Initial supply: 1000 tokens
+    - Sufficient SOL balance for transaction fees`,
     label: "Create Meme Coin",
     links: {
       actions: [
@@ -33,10 +81,30 @@ export const GET = async (req: Request) => {
           label: "Create Token",
           href: `${req.url}?name={name}&ticker={ticker}&description={description}&image={image}`,
           parameters: [
-            { name: "name", label: "Token Name" },
-            { name: "ticker", label: "Ticker Symbol" },
-            { name: "description", label: "Description" },
-            { name: "image", label: "Image URL" },
+            { 
+              name: "name", 
+              label: "Token Name",
+              required: true,
+              pattern: `.{${CONFIG.MIN_NAME_LENGTH},${CONFIG.MAX_NAME_LENGTH}}`
+            },
+            { 
+              name: "ticker", 
+              label: "Ticker Symbol",
+              required: true,
+              pattern: `.{${CONFIG.MIN_TICKER_LENGTH},${CONFIG.MAX_TICKER_LENGTH}}`
+            },
+            { 
+              name: "description", 
+              label: "Description",
+              required: false,
+              pattern: `.{0,200}`
+            },
+            { 
+              name: "image", 
+              label: "Image URL",
+              required: false,
+              pattern: "https?://.+"
+            },
           ],
           type: "transaction",
         },
@@ -53,67 +121,118 @@ export const GET = async (req: Request) => {
   });
 };
 
-// OPTIONS method, same as GET
+ 
 export const OPTIONS = GET;
-
-// POST endpoint to handle the creation of the meme coin
+ 
 export const POST = async (req: Request) => {
   try {
     const body: ActionPostRequest = await req.json();
     const url = new URL(req.url);
     const params = url.searchParams;
 
-    // Parse user-provided account and input parameters
-    let account: PublicKey;
-    try {
-      account = new PublicKey(body.account);
-    } catch (err) {
-      console.error("Invalid public key:", err);
-      return new Response("Invalid account public key", { status: 400 });
+     
+    console.log("Starting token creation process");
+    console.log("Parameters:", Object.fromEntries(params.entries()));
+ 
+    const validationErrors = validateInput(params);
+    if (validationErrors.length > 0) {
+      return new Response(JSON.stringify({ errors: validationErrors }), {
+        status: 400,
+        headers: ACTIONS_CORS_HEADERS,
+      });
     }
-    
-    const connection = new Connection(clusterApiUrl("devnet"));
 
-    const mintKeypair = new PublicKey(params.get("mint") || account.toString());
-    const tokenName = params.get("name") || "Custom Token";
-    const ticker = params.get("ticker") || "MEME";
+    const account = new PublicKey(body.account);
+    console.log("Account public key:", account.toBase58());
+ 
+    const connection = new Connection(clusterApiUrl("devnet"), 'confirmed');
+ 
+    const balance = await connection.getBalance(account);
+    const requiredBalance = await getMinimumBalanceForRentExemptMint(connection);
+    console.log("Current balance:", balance / 1e9, "SOL");
+    console.log("Required balance:", requiredBalance / 1e9, "SOL");
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const description = params.get("description") || "Your custom meme coin on Solana.";
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const image = params.get("image") || "";  
+    if (balance < requiredBalance) {
+      return new Response(JSON.stringify({ 
+        error: `Insufficient balance. Required: ${requiredBalance / 1e9} SOL` 
+      }), {
+        status: 400,
+        headers: ACTIONS_CORS_HEADERS,
+      });
+    }
+ 
+    const mintKeypair = Keypair.generate();
+    console.log("Generated mint address:", mintKeypair.publicKey.toBase58());
 
-    // Get the minimum balance required for a mint account
-    const lamports = await getMinimumBalanceForRentExemptMint(connection);
-
-    // Create the transaction to initialize the mint
+    const associatedTokenAccount = await getAssociatedTokenAddress(
+      mintKeypair.publicKey,
+      account
+    );
+    console.log("Associated token account:", associatedTokenAccount.toBase58());
+ 
     const transaction = new Transaction().add(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       SystemProgram.createAccount({
         fromPubkey: account,
-        newAccountPubkey: mintKeypair,
+        newAccountPubkey: mintKeypair.publicKey,
         space: MINT_SIZE,
-        lamports,
+        lamports: requiredBalance,
         programId: TOKEN_PROGRAM_ID,
       }),
       createInitializeMintInstruction(
-        mintKeypair,
-        9,  // Token decimals
-        account,  // Mint authority
-        account,  // Freeze authority
+        mintKeypair.publicKey,
+        CONFIG.DECIMALS,
+        account,
+        account,
         TOKEN_PROGRAM_ID
+      ),
+      createAssociatedTokenAccountInstruction(
+        account, 
+        associatedTokenAccount, 
+        account, 
+        mintKeypair.publicKey
+      ),
+      
+      createMintToInstruction(
+        mintKeypair.publicKey,
+        associatedTokenAccount,
+        account,
+        CONFIG.INITIAL_SUPPLY
       )
     );
-
-    // Set the transaction fee payer and recent blockhash
+ 
+    const latestBlockhash = await connection.getLatestBlockhash('confirmed');
     transaction.feePayer = account;
-    transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    transaction.recentBlockhash = latestBlockhash.blockhash;
+     
+    transaction.sign(mintKeypair);
 
-    // Create payload with the transaction for client-side signing
+    console.log("Transaction created with blockhash:", latestBlockhash.blockhash);
+ 
+    const solscanLink = `https://solscan.io/token/${mintKeypair.publicKey.toBase58()}?cluster=devnet`;
+ 
     const payload: ActionPostResponse = await createPostResponse({
       fields: {
         transaction,
-        message: `Creating ${tokenName} Token with Ticker ${ticker}`,
+        message: `Your meme coin is being created! 🎉
+
+Token Details:
+• Name: ${params.get("name")}
+• Ticker: ${params.get("ticker")}
+• Mint Address: ${mintKeypair.publicKey.toBase58()}
+• Initial Supply: 1000 tokens
+• Decimals: ${CONFIG.DECIMALS}
+
+View on Solscan: [View Token](${solscanLink})
+
+If the token doesn't appear in your wallet automatically:
+1. Copy the Mint Address above
+2. Open your wallet
+3. Click "Add Token" or "+ Custom Token"
+4. Paste the Mint Address
+5. Make sure "Devnet" is selected
+6. Click "Add"
+
+Please approve the transaction to finalize creation.`,
         type: "transaction",
       },
     });
@@ -126,8 +245,12 @@ export const POST = async (req: Request) => {
       },
     });
   } catch (err) {
-    console.error("Transaction error:", err);
-    return new Response("Transaction could not be completed", {
+    console.error("Token creation error:", err);
+    const errorMessage = err instanceof Error ? err.message : "Transaction could not be completed";
+    return new Response(JSON.stringify({ 
+      error: errorMessage,
+      details: err instanceof Error ? err.stack : undefined
+    }), {
       status: 500,
       headers: ACTIONS_CORS_HEADERS,
     });
