@@ -22,15 +22,14 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
 } from "@solana/spl-token";
-
+ 
 const CONFIG = {
   MAX_NAME_LENGTH: 32,
   MAX_TICKER_LENGTH: 5,
   MIN_NAME_LENGTH: 3,
   MIN_TICKER_LENGTH: 2,
-  COMPUTE_UNITS: 100000,
   DECIMALS: 9,
-  INITIAL_SUPPLY: 1000000000000,  
+  INITIAL_SUPPLY: 1000000000,  
 };
  
 const validateInput = (params: URLSearchParams) => {
@@ -39,6 +38,8 @@ const validateInput = (params: URLSearchParams) => {
   const ticker = params.get("ticker");
   const description = params.get("description");
   const image = params.get("image");
+  const decimals = params.get("decimals");
+  const initialSupply = params.get("initialSupply");
 
   if (!name || name.length < CONFIG.MIN_NAME_LENGTH || name.length > CONFIG.MAX_NAME_LENGTH) {
     errors.push(`Token name must be between ${CONFIG.MIN_NAME_LENGTH} and ${CONFIG.MAX_NAME_LENGTH} characters`);
@@ -60,9 +61,18 @@ const validateInput = (params: URLSearchParams) => {
     }
   }
 
+  if (!decimals || isNaN(Number(decimals)) || Number(decimals) < 0 || Number(decimals) > 18) {
+    errors.push("Decimals must be a number between 0 and 18");
+  }
+
+  if (!initialSupply || isNaN(Number(initialSupply)) || Number(initialSupply) <= 0) {
+    errors.push("Initial supply must be a positive number");
+  }
+
   return errors;
 };
- 
+
+// GET request handler
 export const GET = async (req: Request) => {
   const payload: ActionGetResponse = {
     title: "Create Your Meme Coin",
@@ -72,14 +82,15 @@ export const GET = async (req: Request) => {
     - Ticker: ${CONFIG.MIN_TICKER_LENGTH}-${CONFIG.MAX_TICKER_LENGTH} characters
     - Description: Up to 200 characters
     - Valid image URL (optional)
-    - Initial supply: 1000 tokens
+    - Decimals: 0-18
+    - Initial supply: Positive number
     - Sufficient SOL balance for transaction fees`,
     label: "Create Meme Coin",
     links: {
       actions: [
         {
           label: "Create Token",
-          href: `${req.url}?name={name}&ticker={ticker}&description={description}&image={image}`,
+          href: `${req.url}?name={name}&ticker={ticker}&description={description}&image={image}&decimals={decimals}&initialSupply={initialSupply}`,
           parameters: [
             { 
               name: "name", 
@@ -103,7 +114,19 @@ export const GET = async (req: Request) => {
               name: "image", 
               label: "Image URL",
               required: false,
-              pattern: "https?://.+"
+              pattern: "https?://.+" 
+            },
+            {
+              name: "decimals",
+              label: "Decimals",
+              required: true,
+              pattern: "\\d+"
+            },
+            {
+              name: "initialSupply",
+              label: "Initial Supply",
+              required: true,
+              pattern: "\\d+"
             },
           ],
           type: "transaction",
@@ -121,19 +144,21 @@ export const GET = async (req: Request) => {
   });
 };
 
- 
+// OPTIONS request handler
 export const OPTIONS = GET;
- 
+
+// POST request handler// ... (keep the existing imports and CONFIG)
+
+// POST request handler
 export const POST = async (req: Request) => {
   try {
     const body: ActionPostRequest = await req.json();
     const url = new URL(req.url);
     const params = url.searchParams;
 
-     
     console.log("Starting token creation process");
     console.log("Parameters:", Object.fromEntries(params.entries()));
- 
+
     const validationErrors = validateInput(params);
     if (validationErrors.length > 0) {
       return new Response(JSON.stringify({ errors: validationErrors }), {
@@ -144,9 +169,9 @@ export const POST = async (req: Request) => {
 
     const account = new PublicKey(body.account);
     console.log("Account public key:", account.toBase58());
- 
+
     const connection = new Connection(clusterApiUrl("devnet"), 'confirmed');
- 
+
     const balance = await connection.getBalance(account);
     const requiredBalance = await getMinimumBalanceForRentExemptMint(connection);
     console.log("Current balance:", balance / 1e9, "SOL");
@@ -160,7 +185,7 @@ export const POST = async (req: Request) => {
         headers: ACTIONS_CORS_HEADERS,
       });
     }
- 
+
     const mintKeypair = Keypair.generate();
     console.log("Generated mint address:", mintKeypair.publicKey.toBase58());
 
@@ -169,7 +194,15 @@ export const POST = async (req: Request) => {
       account
     );
     console.log("Associated token account:", associatedTokenAccount.toBase58());
- 
+
+    const name = params.get("name") || "Unnamed Token";
+    const symbol = params.get("ticker") || "UNKNOWN";
+    const description = params.get("description") || "";
+    const image = params.get("image") || "";
+    const decimals = Number(params.get("decimals") || CONFIG.DECIMALS);
+    const initialSupply = BigInt(params.get("initialSupply") || CONFIG.INITIAL_SUPPLY);
+    const adjustedInitialSupply = initialSupply * BigInt(10 ** decimals);
+
     const transaction = new Transaction().add(
       SystemProgram.createAccount({
         fromPubkey: account,
@@ -180,7 +213,7 @@ export const POST = async (req: Request) => {
       }),
       createInitializeMintInstruction(
         mintKeypair.publicKey,
-        CONFIG.DECIMALS,
+        decimals,
         account,
         account,
         TOKEN_PROGRAM_ID
@@ -191,46 +224,35 @@ export const POST = async (req: Request) => {
         account, 
         mintKeypair.publicKey
       ),
-      
       createMintToInstruction(
         mintKeypair.publicKey,
         associatedTokenAccount,
         account,
-        CONFIG.INITIAL_SUPPLY
+        adjustedInitialSupply
       )
     );
- 
+
     const latestBlockhash = await connection.getLatestBlockhash('confirmed');
     transaction.feePayer = account;
     transaction.recentBlockhash = latestBlockhash.blockhash;
-     
-    transaction.sign(mintKeypair);
 
+    // Sign the transaction
+    transaction.sign(mintKeypair);
     console.log("Transaction created with blockhash:", latestBlockhash.blockhash);
- 
-    const solscanLink = `https://solscan.io/token/${mintKeypair.publicKey.toBase58()}?cluster=devnet`;
- 
+
     const payload: ActionPostResponse = await createPostResponse({
       fields: {
         transaction,
         message: `Your meme coin is being created! 🎉
 
 Token Details:
-• Name: ${params.get("name")}
-• Ticker: ${params.get("ticker")}
+• Name: ${name}
+• Ticker: ${symbol}
+• Description: ${description}
+• Image: ${image}
 • Mint Address: ${mintKeypair.publicKey.toBase58()}
-• Initial Supply: 1000 tokens
-• Decimals: ${CONFIG.DECIMALS}
-
-View on Solscan: [View Token](${solscanLink})
-
-If the token doesn't appear in your wallet automatically:
-1. Copy the Mint Address above
-2. Open your wallet
-3. Click "Add Token" or "+ Custom Token"
-4. Paste the Mint Address
-5. Make sure "Devnet" is selected
-6. Click "Add"
+• Initial Supply: ${initialSupply.toString()} tokens
+• Decimals: ${decimals}
 
 Please approve the transaction to finalize creation.`,
         type: "transaction",
