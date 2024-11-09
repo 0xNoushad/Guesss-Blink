@@ -14,39 +14,50 @@ import {
   Keypair,
 } from "@solana/web3.js";
 import {
-  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createInitializeMintInstruction,
-  getMinimumBalanceForRentExemptMint,
-  MINT_SIZE,
+
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
+  getMintLen,
+  ExtensionType,
+  createInitializeMetadataPointerInstruction,
 } from "@solana/spl-token";
- 
+import {
+  createInitializeInstruction,
+  createUpdateFieldInstruction,
+  TokenMetadata,
+} from "@solana/spl-token-metadata";
+
+interface TokenFormData {
+  name: string;
+  symbol: string;
+  description: string;
+  image: string;
+  decimals: number;
+  initialSupply: number;
+}
+
 const CONFIG = {
   MAX_NAME_LENGTH: 32,
-  MAX_TICKER_LENGTH: 5,
+  MAX_SYMBOL_LENGTH: 10,
   MIN_NAME_LENGTH: 3,
-  MIN_TICKER_LENGTH: 2,
+  MIN_SYMBOL_LENGTH: 2,
   DECIMALS: 9,
-  INITIAL_SUPPLY: 1000000000,  
+  INITIAL_SUPPLY: 1000000000,
 };
- 
-const validateInput = (params: URLSearchParams) => {
+
+const validateInput = (params: TokenFormData): string[] => {
   const errors: string[] = [];
-  const name = params.get("name");
-  const ticker = params.get("ticker");
-  const description = params.get("description");
-  const image = params.get("image");
-  const decimals = params.get("decimals");
-  const initialSupply = params.get("initialSupply");
+  const { name, symbol, description, image, decimals, initialSupply } = params;
 
   if (!name || name.length < CONFIG.MIN_NAME_LENGTH || name.length > CONFIG.MAX_NAME_LENGTH) {
     errors.push(`Token name must be between ${CONFIG.MIN_NAME_LENGTH} and ${CONFIG.MAX_NAME_LENGTH} characters`);
   }
 
-  if (!ticker || ticker.length < CONFIG.MIN_TICKER_LENGTH || ticker.length > CONFIG.MAX_TICKER_LENGTH) {
-    errors.push(`Ticker must be between ${CONFIG.MIN_TICKER_LENGTH} and ${CONFIG.MAX_TICKER_LENGTH} characters`);
+  if (!symbol || symbol.length < CONFIG.MIN_SYMBOL_LENGTH || symbol.length > CONFIG.MAX_SYMBOL_LENGTH) {
+    errors.push(`Symbol must be between ${CONFIG.MIN_SYMBOL_LENGTH} and ${CONFIG.MAX_SYMBOL_LENGTH} characters`);
   }
 
   if (description && description.length > 200) {
@@ -61,36 +72,34 @@ const validateInput = (params: URLSearchParams) => {
     }
   }
 
-  if (!decimals || isNaN(Number(decimals)) || Number(decimals) < 0 || Number(decimals) > 18) {
-    errors.push("Decimals must be a number between 0 and 18");
+  if (isNaN(decimals) || decimals < 0 || decimals > 9) {
+    errors.push("Decimals must be a number between 0 and 9");
   }
 
-  if (!initialSupply || isNaN(Number(initialSupply)) || Number(initialSupply) <= 0) {
+  if (isNaN(initialSupply) || initialSupply <= 0) {
     errors.push("Initial supply must be a positive number");
   }
 
   return errors;
 };
 
-// GET request handler
-export const GET = async (req: Request) => {
+export async function GET(req: Request): Promise<Response> {
   const payload: ActionGetResponse = {
-    title: "Create Your Meme Coin",
+    title: "Create Your Token with Metadata",
     icon: "https://i.imgur.com/DIb21T3.png",
-    description: `Create your own meme coin on Solana. Requirements:
+    description: `Create your own token on Solana with metadata. Requirements:
     - Name: ${CONFIG.MIN_NAME_LENGTH}-${CONFIG.MAX_NAME_LENGTH} characters
-    - Ticker: ${CONFIG.MIN_TICKER_LENGTH}-${CONFIG.MAX_TICKER_LENGTH} characters
+    - Symbol: ${CONFIG.MIN_SYMBOL_LENGTH}-${CONFIG.MAX_SYMBOL_LENGTH} characters
     - Description: Up to 200 characters
     - Valid image URL (optional)
-    - Decimals: 0-18
-    - Initial supply: Positive number
-    - Sufficient SOL balance for transaction fees`,
-    label: "Create Meme Coin",
+    - Decimals: 0-9
+    - Initial supply: Positive number`,
+    label: "Create Token",
     links: {
       actions: [
         {
           label: "Create Token",
-          href: `${req.url}?name={name}&ticker={ticker}&description={description}&image={image}&decimals={decimals}&initialSupply={initialSupply}`,
+          href: `${req.url}?name={name}&symbol={symbol}&description={description}&image={image}&decimals={decimals}&initialSupply={initialSupply}`,
           parameters: [
             { 
               name: "name", 
@@ -99,10 +108,10 @@ export const GET = async (req: Request) => {
               pattern: `.{${CONFIG.MIN_NAME_LENGTH},${CONFIG.MAX_NAME_LENGTH}}`
             },
             { 
-              name: "ticker", 
-              label: "Ticker Symbol",
+              name: "symbol", 
+              label: "Symbol",
               required: true,
-              pattern: `.{${CONFIG.MIN_TICKER_LENGTH},${CONFIG.MAX_TICKER_LENGTH}}`
+              pattern: `.{${CONFIG.MIN_SYMBOL_LENGTH},${CONFIG.MAX_SYMBOL_LENGTH}}`
             },
             { 
               name: "description", 
@@ -120,7 +129,7 @@ export const GET = async (req: Request) => {
               name: "decimals",
               label: "Decimals",
               required: true,
-              pattern: "\\d+"
+              pattern: "\\d"
             },
             {
               name: "initialSupply",
@@ -142,24 +151,26 @@ export const GET = async (req: Request) => {
       "X-Blockchain-Ids": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
     },
   });
-};
+}
 
-// OPTIONS request handler
 export const OPTIONS = GET;
 
-// POST request handler// ... (keep the existing imports and CONFIG)
-
-// POST request handler
-export const POST = async (req: Request) => {
+export async function POST(req: Request): Promise<Response> {
   try {
     const body: ActionPostRequest = await req.json();
     const url = new URL(req.url);
-    const params = url.searchParams;
+    const params = new URLSearchParams(url.search);
 
-    console.log("Starting token creation process");
-    console.log("Parameters:", Object.fromEntries(params.entries()));
+    const formData: TokenFormData = {
+      name: params.get("name") || "",
+      symbol: params.get("symbol") || "",
+      description: params.get("description") || "",
+      image: params.get("image") || "",
+      decimals: Number(params.get("decimals")) || CONFIG.DECIMALS,
+      initialSupply: Number(params.get("initialSupply")) || CONFIG.INITIAL_SUPPLY
+    };
 
-    const validationErrors = validateInput(params);
+    const validationErrors = validateInput(formData);
     if (validationErrors.length > 0) {
       return new Response(JSON.stringify({ errors: validationErrors }), {
         status: 400,
@@ -168,67 +179,96 @@ export const POST = async (req: Request) => {
     }
 
     const account = new PublicKey(body.account);
-    console.log("Account public key:", account.toBase58());
-
     const connection = new Connection(clusterApiUrl("devnet"), 'confirmed');
-
-    const balance = await connection.getBalance(account);
-    const requiredBalance = await getMinimumBalanceForRentExemptMint(connection);
-    console.log("Current balance:", balance / 1e9, "SOL");
-    console.log("Required balance:", requiredBalance / 1e9, "SOL");
-
-    if (balance < requiredBalance) {
-      return new Response(JSON.stringify({ 
-        error: `Insufficient balance. Required: ${requiredBalance / 1e9} SOL` 
-      }), {
-        status: 400,
-        headers: ACTIONS_CORS_HEADERS,
-      });
-    }
-
     const mintKeypair = Keypair.generate();
-    console.log("Generated mint address:", mintKeypair.publicKey.toBase58());
+    const mint = mintKeypair.publicKey;
 
-    const associatedTokenAccount = await getAssociatedTokenAddress(
-      mintKeypair.publicKey,
-      account
+    const adjustedInitialSupply = BigInt(formData.initialSupply) * BigInt(10 ** formData.decimals);
+
+    const metaData: TokenMetadata = {
+      name: formData.name,
+      symbol: formData.symbol,
+      uri: formData.image,
+      mint,
+      updateAuthority: account,
+      additionalMetadata: [["description", formData.description]],
+    };
+
+    const metadataExtension = 2 + 2;
+    const metadataLen = Buffer.from(JSON.stringify(metaData)).length;
+    const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+    
+    const lamports = await connection.getMinimumBalanceForRentExemption(
+      mintLen + metadataExtension + metadataLen
     );
-    console.log("Associated token account:", associatedTokenAccount.toBase58());
-
-    const name = params.get("name") || "Unnamed Token";
-    const symbol = params.get("ticker") || "UNKNOWN";
-    const description = params.get("description") || "";
-    const image = params.get("image") || "";
-    const decimals = Number(params.get("decimals") || CONFIG.DECIMALS);
-    const initialSupply = BigInt(params.get("initialSupply") || CONFIG.INITIAL_SUPPLY);
-    const adjustedInitialSupply = initialSupply * BigInt(10 ** decimals);
 
     const transaction = new Transaction().add(
       SystemProgram.createAccount({
         fromPubkey: account,
-        newAccountPubkey: mintKeypair.publicKey,
-        space: MINT_SIZE,
-        lamports: requiredBalance,
-        programId: TOKEN_PROGRAM_ID,
+        newAccountPubkey: mint,
+        space: mintLen,
+        lamports,
+        programId: TOKEN_2022_PROGRAM_ID,
       }),
+      createInitializeMetadataPointerInstruction(
+        mint,
+        account,
+        mint,
+        TOKEN_2022_PROGRAM_ID
+      ),
       createInitializeMintInstruction(
-        mintKeypair.publicKey,
-        decimals,
+        mint,
+        formData.decimals,
         account,
         account,
-        TOKEN_PROGRAM_ID
+        TOKEN_2022_PROGRAM_ID
       ),
+      createInitializeInstruction({
+        programId: TOKEN_2022_PROGRAM_ID,
+        metadata: mint,
+        updateAuthority: account,
+        mint: mint,
+        mintAuthority: account,
+        name: metaData.name,
+        symbol: metaData.symbol,
+        uri: metaData.uri,
+      })
+    );
+
+    if (formData.description) {
+      transaction.add(
+        createUpdateFieldInstruction({
+          programId: TOKEN_2022_PROGRAM_ID,
+          metadata: mint,
+          updateAuthority: account,
+          field: "description",
+          value: formData.description,
+        })
+      );
+    }
+
+    const associatedTokenAccount = await getAssociatedTokenAddress(
+      mint,
+      account,
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    transaction.add(
       createAssociatedTokenAccountInstruction(
-        account, 
-        associatedTokenAccount, 
-        account, 
-        mintKeypair.publicKey
-      ),
-      createMintToInstruction(
-        mintKeypair.publicKey,
+        account,
         associatedTokenAccount,
         account,
-        adjustedInitialSupply
+        mint,
+        TOKEN_2022_PROGRAM_ID
+      ),
+      createMintToInstruction(
+        mint,
+        associatedTokenAccount,
+        account,
+        adjustedInitialSupply,
+        [],
+        TOKEN_2022_PROGRAM_ID
       )
     );
 
@@ -236,23 +276,21 @@ export const POST = async (req: Request) => {
     transaction.feePayer = account;
     transaction.recentBlockhash = latestBlockhash.blockhash;
 
-    // Sign the transaction
     transaction.sign(mintKeypair);
-    console.log("Transaction created with blockhash:", latestBlockhash.blockhash);
 
     const payload: ActionPostResponse = await createPostResponse({
       fields: {
         transaction,
-        message: `Your meme coin is being created! 🎉
+        message: `Your token is being created with metadata! 🎉
 
 Token Details:
-• Name: ${name}
-• Ticker: ${symbol}
-• Description: ${description}
-• Image: ${image}
-• Mint Address: ${mintKeypair.publicKey.toBase58()}
-• Initial Supply: ${initialSupply.toString()} tokens
-• Decimals: ${decimals}
+• Name: ${formData.name}
+• Symbol: ${formData.symbol}
+• Description: ${formData.description}
+• Image: ${formData.image}
+• Mint Address: ${mint.toBase58()}
+• Initial Supply: ${formData.initialSupply} tokens
+• Decimals: ${formData.decimals}
 
 Please approve the transaction to finalize creation.`,
         type: "transaction",
@@ -267,14 +305,10 @@ Please approve the transaction to finalize creation.`,
       },
     });
   } catch (err) {
-    console.error("Token creation error:", err);
     const errorMessage = err instanceof Error ? err.message : "Transaction could not be completed";
-    return new Response(JSON.stringify({ 
-      error: errorMessage,
-      details: err instanceof Error ? err.stack : undefined
-    }), {
-      status: 500,
+    return new Response(JSON.stringify({ error: errorMessage }), {
       headers: ACTIONS_CORS_HEADERS,
+      status: 400,
     });
   }
-};
+}
