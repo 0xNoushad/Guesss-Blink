@@ -93,14 +93,16 @@ export async function POST(request: Request) {
   try {
     sender = new PublicKey(body.account);
   } catch (error) {
+    console.error("Error creating PublicKey:", error); // Logs the error for debugging
     return Response.json(
       { error: { message: "Invalid Solana account" } },
-      { 
-        status: 400, 
-        headers: ACTIONS_CORS_HEADERS 
+      {
+        status: 400,
+        headers: ACTIONS_CORS_HEADERS,
       }
     );
   }
+  
 
   // Extract and validate selected number
   const selectedNumber = parseInt(url.searchParams.get("selectedNumber") || "0");
